@@ -228,7 +228,7 @@ class PriceListParser:
         scroll_timer.stop()
 
     def wait_for_dynamic_content(self):
-        """Ожидание загрузки динамического контента"""
+        """Ожидание загрузки динамического контента с индикатором"""
         content_timer = Timer("Ожидание динамического контента")
         content_timer.start()
 
@@ -236,21 +236,26 @@ class PriceListParser:
         stable_count = 0
         max_stable = 3 if self.fast_mode else 5
 
+        print("🔄 Ожидаем загрузку динамического контента...")
+
         for attempt in range(10):  # Максимум 10 попыток
             # Считаем количество контейнеров
             containers = self.driver.find_elements(By.CSS_SELECTOR, ".inner-container")
             current_count = len(containers)
 
             if current_count > previous_count:
-                print(f"Загружено контейнеров: {current_count}")
+                print(
+                    f"  📦 Загружено контейнеров: {current_count} (+{current_count - previous_count})"
+                )
                 previous_count = current_count
                 stable_count = 0
             else:
                 stable_count += 1
+                print(f"  ⏳ Проверка {attempt + 1}/10... Контейнеров: {current_count}")
 
             # Если количество стабильно, завершаем ожидание
             if stable_count >= max_stable:
-                print(f"Контент стабилизировался на {current_count} контейнерах")
+                print(f"  ✅ Контент стабилизировался на {current_count} контейнерах")
                 break
 
             time.sleep(0.5 if self.fast_mode else 1.0)
@@ -286,47 +291,72 @@ class PriceListParser:
         total_services = 0
         processed_containers = 0
 
-        # Batch обработка для ускорения
-        batch_size = 15 if self.fast_mode else 5
+        # Уменьшаем размер пакета для лучшего контроля
+        batch_size = 10 if self.fast_mode else 5
+
+        print(f"\n🔄 Начинаем обработку {len(containers)} контейнеров...")
+        print("=" * 50)
 
         for i in range(0, len(containers), batch_size):
-            batch_timer = Timer(f"Обработка пакета {i//batch_size + 1}")
+            batch_num = i // batch_size + 1
+            total_batches = (len(containers) + batch_size - 1) // batch_size
+
+            print(
+                f"\n📦 Пакет {batch_num}/{total_batches} (контейнеры {i+1}-{min(i+batch_size, len(containers))})"
+            )
+
+            batch_timer = Timer(f"Пакет {batch_num}")
             batch_timer.start()
 
             batch = containers[i : i + batch_size]
+            batch_services = 0
 
             for j, container in enumerate(batch):
                 container_index = i + j
+
+                # Показываем прогресс каждого контейнера
+                print(
+                    f"  ⏳ Обрабатываем контейнер {container_index + 1}...",
+                    end="",
+                    flush=True,
+                )
+
                 try:
                     # Быстрая проверка наличия категории
                     category_name = self.extract_category_from_container(container)
 
                     if not category_name:
+                        print(" ❌ Категория не найдена")
                         continue
 
                     # Ускоренное извлечение услуг
                     services = self.extract_services_from_container(
                         container, category_name
                     )
-                    total_services += len(services)
+
+                    service_count = len(services)
+                    batch_services += service_count
+                    total_services += service_count
                     processed_containers += 1
 
-                    if (
-                        not self.fast_mode or container_index % 25 == 0
-                    ):  # Уменьшаем вывод в быстром режиме
-                        print(
-                            f"  Контейнер {container_index + 1}: {category_name} ({len(services)} услуг)"
-                        )
+                    print(f" ✅ {category_name} ({service_count} услуг)")
 
                 except Exception as e:
+                    print(f" ❌ Ошибка: {str(e)[:50]}...")
                     if not self.fast_mode:
-                        print(f"Ошибка в контейнере {container_index + 1}: {e}")
+                        print(f"    Полная ошибка: {e}")
                     continue
 
             batch_timer.stop()
+            print(f"  📊 Пакет завершен: {batch_services} услуг добавлено")
 
-        print(f"\nОбработано контейнеров: {processed_containers}")
-        print(f"Всего извлечено услуг: {total_services}")
+            # Показываем общий прогресс
+            progress = ((i + batch_size) / len(containers)) * 100
+            print(f"  📈 Общий прогресс: {progress:.1f}% ({total_services} услуг)")
+
+        print("\n" + "=" * 50)
+        print(f"✅ Обработано контейнеров: {processed_containers}")
+        print(f"📋 Всего извлечено услуг: {total_services}")
 
         parse_timer.stop()
         return len(self.data) > 0
@@ -391,31 +421,27 @@ class PriceListParser:
         return services
 
     def extract_service_data_from_card(self, card, category_name):
-        """Быстрое извлечение данных из карточки"""
+        """Оптимизированное извлечение данных из карточки"""
         try:
-            # Получаем весь текст карточки сразу для быстрого анализа
+            # Получаем весь текст карточки один раз
             card_text = card.text.strip()
             if not card_text:
                 return None
 
-            # Название услуги - расширенный список селекторов
+            # 1. НАЗВАНИЕ УСЛУГИ - приоритетные селекторы
             service_name = ""
             name_selectors = [
                 ".title-block__title",
                 ".service-title",
-                ".service-name",
-                ".title",
                 "h3",
-                "h4",
-                "h5",
-                ".name",
+                "h4",  # Только самые вероятные
             ]
 
             for selector in name_selectors:
                 try:
-                    elements = card.find_elements(By.CSS_SELECTOR, selector)
-                    if elements and elements[0].text.strip():
-                        service_name = elements[0].text.strip()
+                    element = card.find_element(By.CSS_SELECTOR, selector)
+                    if element and element.text.strip():
+                        service_name = element.text.strip()
                         break
                 except:
                     continue
@@ -423,64 +449,92 @@ class PriceListParser:
             if not service_name:
                 return None
 
-            # Быстрое извлечение остальных данных
+            # Инициализация остальных полей
             duration = ""
             description = ""
             price = ""
 
-            # Длительность - расширенные селекторы
-            duration_selectors = [
-                ".comment__seance-length",
-                ".duration",
-                ".comment",
-                ".time",
-                ".length",
-            ]
+            # 2. БЫСТРЫЙ ПОИСК ВСЕХ ДАННЫХ ОДНИМ ПРОХОДОМ
+            # Разбиваем текст на строки для анализа
+            lines = [line.strip() for line in card_text.split("\n") if line.strip()]
 
-            for selector in duration_selectors:
+            # Предварительные паттерны для быстрого определения
+            import re
+
+            price_pattern = re.compile(
+                r"(\d+(?:\s*\d+)*\s*[-–—]?\s*\d*(?:\s*\d+)*\s*[₽руб]|от\s+\d+|₽\s*\d+)",
+                re.IGNORECASE,
+            )
+            time_pattern = re.compile(
+                r"(\d+\s*(?:мин|минут|ч|час|часов)|^\d+:\d+)", re.IGNORECASE
+            )
+
+            # Проходим по строкам и классифицируем их
+            for line in lines:
+                if line == service_name:
+                    continue
+
+                # Проверяем на цену
+                if not price and price_pattern.search(line):
+                    price = line
+                    continue
+
+                # Проверяем на время
+                if not duration and time_pattern.search(line):
+                    duration = line
+                    continue
+
+                # Остальное считаем описанием (если подходит по критериям)
+                if (
+                    not description
+                    and len(line) > 15
+                    and not line.isdigit()
+                    and not price_pattern.search(line)
+                    and not time_pattern.search(line)
+                ):
+                    description = line
+
+            # 3. ДОПОЛНИТЕЛЬНЫЙ ПОИСК ЧЕРЕЗ СЕЛЕКТОРЫ (только если не найдено)
+            if not price:
                 try:
-                    elements = card.find_elements(By.CSS_SELECTOR, selector)
-                    if elements:
-                        text = elements[0].text.strip()
-                        if text and not any(
-                            word in text.lower()
-                            for word in ["цена", "₽", "руб", "стоимость"]
+                    price_element = card.find_element(
+                        By.CSS_SELECTOR, ".price-range, .price, .cost"
+                    )
+                    if price_element:
+                        price = price_element.text.strip()
+                except:
+                    pass
+
+            if not duration:
+                try:
+                    duration_element = card.find_element(
+                        By.CSS_SELECTOR, ".comment__seance-length, .duration, .time"
+                    )
+                    if duration_element and duration_element.text.strip():
+                        text = duration_element.text.strip()
+                        if not any(
+                            word in text.lower() for word in ["₽", "руб", "цена"]
                         ):
                             duration = text
-                            break
                 except:
-                    continue
+                    pass
 
-            # Цена - расширенные селекторы
-            price_selectors = [".price-range", ".price", ".cost", ".amount", ".sum"]
-
-            for selector in price_selectors:
+            if not description:
                 try:
-                    elements = card.find_elements(By.CSS_SELECTOR, selector)
-                    if elements:
-                        text = elements[0].text.strip()
-                        if text and ("₽" in text or "руб" in text or text.isdigit()):
-                            price = text
-                            break
+                    desc_element = card.find_element(
+                        By.CSS_SELECTOR, ".description, .service-description, p"
+                    )
+                    if desc_element and desc_element.text.strip():
+                        text = desc_element.text.strip()
+                        if (
+                            text != service_name
+                            and len(text) > 10
+                            and not price_pattern.search(text)
+                            and not time_pattern.search(text)
+                        ):
+                            description = text
                 except:
-                    continue
-
-            # Если цену не нашли, быстрый поиск в тексте
-            if not price:
-                import re
-
-                price_patterns = [
-                    r"\d+(?:\s*\d+)*\s*[-–—]?\s*\d*(?:\s*\d+)*\s*[₽руб]",
-                    r"\d+\s*[-–—]?\s*\d*\s*р\b",
-                    r"от\s+\d+",
-                    r"\d+\s*руб",
-                ]
-
-                for pattern in price_patterns:
-                    price_match = re.search(pattern, card_text, re.IGNORECASE)
-                    if price_match:
-                        price = price_match.group(0).strip()
-                        break
+                    pass
 
             return {
                 "category": category_name,
@@ -491,8 +545,6 @@ class PriceListParser:
             }
 
         except Exception as e:
-            if not self.fast_mode:
-                print(f"Ошибка извлечения данных: {e}")
             return None
 
     def save_to_csv(self, filename="price_list.csv"):
