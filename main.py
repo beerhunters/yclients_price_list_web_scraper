@@ -54,7 +54,6 @@ class PriceListParser:
         """Ожидание загрузки динамического контента"""
         print("Ожидаем загрузки страницы...")
 
-        # Сначала ждем базовой загрузки страницы
         try:
             WebDriverWait(self.driver, 15).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
@@ -64,539 +63,281 @@ class PriceListParser:
             print("Не удалось загрузить базовую структуру")
             return False
 
-        # Ждем загрузки JavaScript
         time.sleep(5)
-
-        # ПОЛНАЯ прокрутка страницы для загрузки всего контента
         print("Выполняем полную прокрутку страницы...")
         self.scroll_to_load_all_content()
-
-        # Пробуем найти любые элементы с текстом, похожим на услуги/цены
-        selectors_to_try = [
-            "service_title",
-            "service-title",
-            "[class*='service']",
-            "[class*='title']",
-            "[class*='price']",
-            "[class*='category']",
-        ]
-
-        for selector in selectors_to_try:
-            try:
-                if selector.startswith("["):
-                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                else:
-                    elements = self.driver.find_elements(By.CLASS_NAME, selector)
-
-                if elements:
-                    print(
-                        f"Найдены элементы с селектором: {selector} ({len(elements)} шт.)"
-                    )
-                    return True
-            except:
-                continue
-
-        # Если специфичные элементы не найдены, проверяем общую загрузку
-        try:
-            all_text = self.driver.find_element(By.TAG_NAME, "body").text
-            if len(all_text) > 100:  # Если на странице есть достаточно текста
-                print("Страница загружена (найден контент)")
-                return True
-        except:
-            pass
-
-        print("Не удалось найти ожидаемые элементы, но продолжаем...")
-        return True  # Продолжаем парсинг даже если не нашли специфичные элементы
+        return True
 
     def scroll_to_load_all_content(self):
-        """Упрощенная прокрутка страницы для загрузки всего lazy-loading контента"""
+        """Прокрутка страницы для загрузки всего lazy-loading контента"""
         print("Начинаем полную прокрутку для загрузки всего контента...")
 
-        # Получаем начальную высоту страницы
         last_height = self.driver.execute_script("return document.body.scrollHeight")
-        scroll_pause_time = 2
-        scroll_step = 500  # Прокручиваем по 500px за раз
+        scroll_step = 500
 
-        # Прокручиваем постепенно вниз до загрузки всего контента
         current_position = 0
         while current_position < last_height:
-            # Прокручиваем на следующий шаг
             current_position += scroll_step
             self.driver.execute_script(f"window.scrollTo(0, {current_position});")
-            time.sleep(0.5)  # Короткая пауза между прокрутками
+            time.sleep(0.5)
 
-            # Проверяем, изменилась ли высота страницы (подгрузился новый контент)
             new_height = self.driver.execute_script("return document.body.scrollHeight")
             if new_height > last_height:
                 print(f"Обнаружен новый контент. Высота: {last_height} -> {new_height}")
                 last_height = new_height
 
-        print("Первичная прокрутка завершена")
-
-        # Возвращаемся в начало страницы
         self.driver.execute_script("window.scrollTo(0, 0);")
         time.sleep(2)
-
-        final_height = self.driver.execute_script("return document.body.scrollHeight")
-        print(f"Прокрутка завершена. Итоговая высота страницы: {final_height}px")
+        print(f"Прокрутка завершена. Итоговая высота страницы: {last_height}px")
 
     def parse_services(self):
-        """Парсинг услуг со страницы"""
-        print("Начинаем парсинг услуг...")
+        """Парсинг услуг по контейнерам"""
+        print("Начинаем парсинг услуг по контейнерам...")
 
-        # Сначала анализируем страницу
-        self.analyze_page_structure()
+        # Находим все контейнеры
+        containers = self.driver.find_elements(
+            By.CSS_SELECTOR, ".inner-container.ng-star-inserted"
+        )
+        print(f"Найдено контейнеров: {len(containers)}")
 
-        # Пробуем разные стратегии парсинга
-        strategies = [
-            self.parse_by_exact_structure,  # Новый точный метод
-            self.parse_by_original_classes,
-            self.parse_by_alternative_selectors,
-            self.parse_by_text_patterns,
-            self.parse_by_dom_structure,
-        ]
+        if not containers:
+            print("Контейнеры не найдены, пробуем альтернативный селектор...")
+            containers = self.driver.find_elements(By.CLASS_NAME, "inner-container")
+            print(f"Найдено контейнеров (альтернативный поиск): {len(containers)}")
 
-        for i, strategy in enumerate(strategies, 1):
-            print(f"\n--- Стратегия {i} ---")
+        total_services = 0
+
+        for i, container in enumerate(containers):
             try:
-                if strategy():
-                    print(f"Стратегия {i} успешна! Найдено услуг: {len(self.data)}")
-                    return True
+                # Ищем категорию в текущем контейнере
+                category_name = self.extract_category_from_container(container)
+
+                if not category_name:
+                    continue  # Пропускаем контейнеры без категории
+
+                print(f"\nОбрабатываем контейнер {i+1}: {category_name}")
+
+                # Ищем все услуги в этом контейнере
+                services = self.extract_services_from_container(
+                    container, category_name
+                )
+                total_services += len(services)
+
+                print(f"  Найдено услуг в категории '{category_name}': {len(services)}")
+
             except Exception as e:
-                print(f"Стратегия {i} не сработала: {e}")
+                print(f"Ошибка при обработке контейнера {i+1}: {e}")
                 continue
 
-        print("Все стратегии парсинга не дали результата")
-        return False
+        print(f"\nВсего извлечено услуг: {total_services}")
+        return len(self.data) > 0
 
-    def analyze_page_structure(self):
-        """Анализ структуры страницы"""
-        print("\n=== АНАЛИЗ СТРУКТУРЫ СТРАНИЦЫ ===")
+    def extract_category_from_container(self, container):
+        """Извлечение названия категории из контейнера"""
+        category_selectors = [
+            ".label.category-title",
+            ".category-title",
+            ".service_category_title",
+            ".service_caterogy_title",
+            "[class*='category-title']",
+            "[class*='category_title']",
+        ]
 
-        try:
-            # Получаем заголовок страницы
-            title = self.driver.title
-            print(f"Заголовок: {title}")
+        for selector in category_selectors:
+            try:
+                category_elements = container.find_elements(By.CSS_SELECTOR, selector)
+                if category_elements:
+                    category_text = category_elements[0].text.strip()
+                    if category_text:
+                        return category_text
+            except Exception:
+                continue
 
-            # Получаем URL
-            current_url = self.driver.current_url
-            print(f"URL: {current_url}")
+        return None
 
-            # Ищем все элементы с классами
-            all_elements = self.driver.find_elements(By.CSS_SELECTOR, "*[class]")
-            classes = set()
+    def extract_services_from_container(self, container, category_name):
+        """Извлечение всех услуг из контейнера"""
+        services = []
 
-            for elem in all_elements:
-                class_attr = elem.get_attribute("class")
-                if class_attr:
-                    classes.update(class_attr.split())
-
-            # Фильтруем интересные классы
-            interesting_classes = []
-            keywords = [
-                "service",
-                "price",
-                "category",
-                "title",
-                "name",
-                "cost",
-                "item",
-                "list",
-            ]
-
-            for cls in classes:
-                if any(keyword in cls.lower() for keyword in keywords):
-                    interesting_classes.append(cls)
-
-            print(f"Интересные классы ({len(interesting_classes)}):")
-            for cls in sorted(interesting_classes)[:20]:  # Показываем первые 20
-                elements_count = len(self.driver.find_elements(By.CLASS_NAME, cls))
-                print(f"  .{cls} ({elements_count} элементов)")
-
-            # Ищем текст с ценами
-            price_pattern_elements = self.driver.find_elements(
-                By.XPATH,
-                "//*[contains(text(), '₽') or contains(text(), 'руб') or contains(text(), 'р.') or text()[matches(., '[0-9]+')]]",
-            )
-            print(f"Элементы с возможными ценами: {len(price_pattern_elements)}")
-
-        except Exception as e:
-            print(f"Ошибка анализа: {e}")
-
-    def parse_by_original_classes(self):
-        """Парсинг по исходным классам"""
-        print("Пробуем исходные классы...")
-
-        categories = self.driver.find_elements(By.CLASS_NAME, "service_category_title")
-        services = self.driver.find_elements(By.CLASS_NAME, "service_title")
-        comments = self.driver.find_elements(By.CLASS_NAME, "comment")
-        prices = self.driver.find_elements(By.CLASS_NAME, "service_price")
-
-        print(
-            f"Найдено: категорий={len(categories)}, услуг={len(services)}, комментариев={len(comments)}, цен={len(prices)}"
+        # Ищем все карточки услуг в контейнере
+        service_cards = container.find_elements(
+            By.CSS_SELECTOR, ".card-content-container"
         )
 
-        if len(services) > 0:
-            return self.extract_data_from_elements(
-                categories, services, comments, prices
-            )
+        if not service_cards:
+            # Альтернативные селекторы для карточек услуг
+            alternative_selectors = [
+                ".service-card",
+                ".service_card",
+                "[class*='service-card']",
+                "[class*='card-content']",
+                ".card-container",
+            ]
 
-        return False
+            for selector in alternative_selectors:
+                service_cards = container.find_elements(By.CSS_SELECTOR, selector)
+                if service_cards:
+                    break
 
-    def parse_by_exact_structure(self):
-        """Парсинг по точной структуре сайта"""
-        print("Парсинг по точной структуре сайта...")
+        print(f"    Найдено карточек услуг: {len(service_cards)}")
 
+        for j, card in enumerate(service_cards):
+            try:
+                service_data = self.extract_service_data_from_card(card, category_name)
+                if service_data:
+                    services.append(service_data)
+                    self.data.append(service_data)
+
+            except Exception as e:
+                print(f"    Ошибка при обработке карточки {j+1}: {e}")
+                continue
+
+        return services
+
+    def extract_service_data_from_card(self, card, category_name):
+        """Извлечение данных об услуге из карточки"""
         try:
-            # Ищем все контейнеры с категориями и услугами
-            containers = self.driver.find_elements(By.CLASS_NAME, "inner-container")
-            print(f"Найдено контейнеров: {len(containers)}")
+            # Название услуги
+            service_name = ""
+            title_selectors = [
+                ".title-block__title",
+                ".service-title",
+                ".service_title",
+                "[class*='title-block']",
+                "[class*='service-title']",
+                "h3",
+                "h4",
+                ".title",
+            ]
 
-            current_category = ""
-
-            for container in containers:
+            for selector in title_selectors:
                 try:
-                    # Проверяем есть ли в контейнере категория (исправили опечатку)
-                    category_elements = container.find_elements(
-                        By.CLASS_NAME, "service_caterogy_title"
-                    )
-                    if not category_elements:
-                        # Пробуем альтернативные варианты написания
-                        category_elements = container.find_elements(
-                            By.CLASS_NAME, "service_category_title"
-                        )
-                    if not category_elements:
-                        category_elements = container.find_elements(
-                            By.CSS_SELECTOR,
-                            "[class*='category_title'], [class*='category-title']",
-                        )
-
-                    if category_elements:
-                        current_category = category_elements[0].text.strip()
-                        print(f"Найдена категория: {current_category}")
-                        continue
-
-                    # Ищем карточки услуг в текущем контейнере
-                    service_cards = container.find_elements(
-                        By.CLASS_NAME, "service-card"
-                    )
-                    if not service_cards:
-                        service_cards = container.find_elements(
-                            By.CSS_SELECTOR,
-                            "[class*='service-card'], [class*='service_card']",
-                        )
-
-                    print(f"В контейнере найдено карточек услуг: {len(service_cards)}")
-
-                    for card in service_cards:
-                        try:
-                            # Название услуги
-                            service_name = ""
-                            title_elements = card.find_elements(
-                                By.CLASS_NAME, "title-block__title"
-                            )
-                            if not title_elements:
-                                title_elements = card.find_elements(
-                                    By.CSS_SELECTOR,
-                                    "[class*='title-block'], [class*='title_block']",
-                                )
-                            if title_elements:
-                                service_name = title_elements[0].text.strip()
-
-                            # Длительность
-                            duration = ""
-                            duration_elements = card.find_elements(
-                                By.CLASS_NAME, "comment__seance-length"
-                            )
-                            if not duration_elements:
-                                duration_elements = card.find_elements(
-                                    By.CSS_SELECTOR,
-                                    "[class*='seance-length'], [class*='seance_length']",
-                                )
-                            if duration_elements:
-                                duration = duration_elements[0].text.strip()
-
-                            # Описание
-                            description = ""
-                            desc_elements = card.find_elements(
-                                By.CLASS_NAME, "description"
-                            )
-                            if desc_elements:
-                                description = desc_elements[0].text.strip()
-
-                            # Цена
-                            price_text = ""
-                            price_elements = card.find_elements(
-                                By.CLASS_NAME, "price-range"
-                            )
-                            if not price_elements:
-                                price_elements = card.find_elements(
-                                    By.CSS_SELECTOR,
-                                    "[class*='price-range'], [class*='price_range']",
-                                )
-                            if price_elements:
-                                price_text = price_elements[0].text.strip()
-
-                            # Разбираем цену на диапазон (улучшенная обработка)
-                            price_from = ""
-                            price_to = ""
-                            if price_text:
-                                # Убираем символы валюты и лишние пробелы
-                                import re
-
-                                # Паттерн для цен типа "1 000 – 1 400 ₽", "800-1200", "от 800 до 1200"
-                                price_clean = re.sub(
-                                    r"[₽руб\s]", "", price_text.lower()
-                                )
-                                price_range_match = re.search(
-                                    r"(\d+(?:\s*\d+)*)\s*[-–—]\s*(\d+(?:\s*\d+)*)",
-                                    price_text,
-                                )
-
-                                if price_range_match:
-                                    # Убираем пробелы из чисел
-                                    price_from = re.sub(
-                                        r"\s+", "", price_range_match.group(1)
-                                    )
-                                    price_to = re.sub(
-                                        r"\s+", "", price_range_match.group(2)
-                                    )
-                                else:
-                                    # Если диапазона нет, извлекаем первое число
-                                    number_match = re.search(
-                                        r"(\d+(?:\s*\d+)*)", price_text
-                                    )
-                                    if number_match:
-                                        price_from = re.sub(
-                                            r"\s+", "", number_match.group(1)
-                                        )
-
-                            # Добавляем данные если есть название услуги
-                            if service_name:
-                                self.data.append(
-                                    {
-                                        "category": current_category,
-                                        "service": service_name,
-                                        "duration": duration,
-                                        "description": description,
-                                        "price_from": price_from,
-                                        "price_to": price_to,
-                                    }
-                                )
-
-                        except Exception as e:
-                            print(f"Ошибка при парсинге карточки услуги: {e}")
-                            continue
-
-                except Exception as e:
-                    print(f"Ошибка при обработке контейнера: {e}")
-                    continue
-
-            print(f"Всего собрано услуг: {len(self.data)}")
-            return len(self.data) > 0
-
-        except Exception as e:
-            print(f"Ошибка точного парсинга: {e}")
-            return False
-
-    def parse_by_alternative_selectors(self):
-        """Парсинг альтернативными селекторами (без ограничения в 20 записей)"""
-        print("Пробуем альтернативные селекторы...")
-
-        alternative_selectors = {
-            "categories": ['[class*="category"]', '[class*="group"]', "h1, h2, h3, h4"],
-            "services": [
-                '[class*="service"]',
-                '[class*="title"]',
-                '[class*="name"]',
-                '[class*="item"]',
-            ],
-            "prices": [
-                '[class*="price"]',
-                '[class*="cost"]',
-                '[class*="sum"]',
-                '*[text()*="₽"]',
-            ],
-        }
-
-        for cat_sel in alternative_selectors["categories"]:
-            for serv_sel in alternative_selectors["services"]:
-                for price_sel in alternative_selectors["prices"]:
-                    try:
-                        categories = self.driver.find_elements(By.CSS_SELECTOR, cat_sel)
-                        services = self.driver.find_elements(By.CSS_SELECTOR, serv_sel)
-                        prices = self.driver.find_elements(By.CSS_SELECTOR, price_sel)
-
-                        if len(services) > 3:  # Минимальный порог
-                            print(
-                                f"Найдено услуг: {len(services)} с селекторами: {serv_sel}"
-                            )
-                            # Извлекаем ВСЕ данные без ограничений
-                            for i, service in enumerate(services):  # Убрали [:20]
-                                try:
-                                    service_text = service.text.strip()
-                                    if service_text and len(service_text) > 2:
-                                        price_text = ""
-                                        if i < len(prices):
-                                            price_text = prices[i].text.strip()
-
-                                        self.data.append(
-                                            {
-                                                "category": "Общая категория",
-                                                "service": service_text,
-                                                "duration": "",
-                                                "description": "",
-                                                "price_from": price_text,
-                                                "price_to": "",
-                                            }
-                                        )
-                                except:
-                                    continue
-
-                            if len(self.data) > 0:
-                                return True
-                    except:
-                        continue
-
-        return False
-
-    def parse_by_text_patterns(self):
-        """Парсинг по текстовым паттернам (без ограничений)"""
-        print("Пробуем парсинг по текстовым паттернам...")
-
-        try:
-            # Получаем весь текст страницы
-            body = self.driver.find_element(By.TAG_NAME, "body")
-            all_text = body.text
-
-            # Ищем строки с ценами
-            import re
-
-            price_lines = re.findall(
-                r".*?[0-9]+.*?₽.*?|.*?[0-9]+.*?руб.*?", all_text, re.MULTILINE
-            )
-
-            print(f"Найдено строк с ценами: {len(price_lines)}")
-
-            if len(price_lines) > 0:
-                for line in price_lines:  # Убрали [:20]
-                    line = line.strip()
-                    if len(line) > 5:
-                        # Пытаемся разделить название и цену
-                        price_match = re.search(
-                            r"([0-9\s]+).*?₽|([0-9\s]+).*?руб", line
-                        )
-                        if price_match:
-                            price = price_match.group(0).strip()
-                            service_name = line.replace(price, "").strip()
-
-                            self.data.append(
-                                {
-                                    "category": "Автоопределение",
-                                    "service": service_name,
-                                    "duration": "",
-                                    "description": "",
-                                    "price_from": price,
-                                    "price_to": "",
-                                }
-                            )
-
-                return len(self.data) > 0
-
-        except Exception as e:
-            print(f"Ошибка текстового парсинга: {e}")
-
-        return False
-
-    def parse_by_dom_structure(self):
-        """Парсинг по структуре DOM"""
-        print("Пробуем структурный парсинг...")
-
-        try:
-            # Ищем все div, li, tr которые могут содержать услуги
-            containers = self.driver.find_elements(
-                By.CSS_SELECTOR, "div, li, tr, article, section"
-            )
-
-            for container in containers:
-                try:
-                    text = container.text.strip()
-                    if text and len(text) > 10 and len(text) < 200:
-                        # Проверяем, есть ли в тексте цена
-                        if "₽" in text or "руб" in text:
-                            # Пытаемся извлечь цену
-                            import re
-
-                            price_match = re.search(
-                                r"([0-9\s]+.*?₽|[0-9\s]+.*?руб)", text
-                            )
-                            if price_match:
-                                price = price_match.group(0).strip()
-                                service_name = text.replace(price, "").strip()
-
-                                if len(service_name) > 3:
-                                    self.data.append(
-                                        {
-                                            "category": "DOM структура",
-                                            "service": service_name,
-                                            "duration": "",
-                                            "description": "",
-                                            "price_from": price,
-                                            "price_to": "",
-                                        }
-                                    )
+                    title_elements = card.find_elements(By.CSS_SELECTOR, selector)
+                    if title_elements:
+                        service_name = title_elements[0].text.strip()
+                        if service_name:
+                            break
                 except:
                     continue
 
-            return len(self.data) > 0
+            if not service_name:
+                return None
 
-        except Exception as e:
-            print(f"Ошибка структурного парсинга: {e}")
+            # Длительность/комментарий
+            duration = ""
+            duration_selectors = [
+                ".comment__seance-length",
+                ".seance-length",
+                ".duration",
+                ".comment",
+                "[class*='seance-length']",
+                "[class*='duration']",
+                "[class*='comment']",
+            ]
 
-        return False
-
-    def extract_data_from_elements(self, categories, services, comments, prices):
-        """Извлечение данных из найденных элементов"""
-        current_category = ""
-
-        # Простое сопоставление по индексам
-        for i, service in enumerate(services):
-            try:
-                service_text = service.text.strip()
-                if not service_text:
+            for selector in duration_selectors:
+                try:
+                    duration_elements = card.find_elements(By.CSS_SELECTOR, selector)
+                    if duration_elements:
+                        duration_text = duration_elements[0].text.strip()
+                        if duration_text and not any(
+                            word in duration_text.lower()
+                            for word in ["цена", "стоимость", "₽", "руб"]
+                        ):
+                            duration = duration_text
+                            break
+                except:
                     continue
 
-                # Пытаемся найти категорию
-                if i < len(categories):
-                    category_text = categories[i].text.strip()
-                    if category_text:
-                        current_category = category_text
+            # Описание
+            description = ""
+            desc_selectors = [
+                ".description",
+                ".service-description",
+                "[class*='description']",
+                ".detail",
+                ".details",
+            ]
 
-                # Комментарий
-                comment_text = ""
-                if i < len(comments):
-                    comment_text = comments[i].text.strip()
+            for selector in desc_selectors:
+                try:
+                    desc_elements = card.find_elements(By.CSS_SELECTOR, selector)
+                    if desc_elements:
+                        desc_text = desc_elements[0].text.strip()
+                        if (
+                            desc_text
+                            and desc_text != service_name
+                            and desc_text != duration
+                        ):
+                            description = desc_text
+                            break
+                except:
+                    continue
 
-                # Цена
-                price_text = ""
-                if i < len(prices):
-                    price_text = prices[i].text.strip()
+            # Цена (как один столбец)
+            price = ""
+            price_selectors = [
+                ".price-range",
+                ".price",
+                ".cost",
+                ".service-price",
+                "[class*='price-range']",
+                "[class*='price']",
+                "[class*='cost']",
+            ]
 
-                self.data.append(
-                    {
-                        "category": current_category,
-                        "service": service_text,
-                        "duration": comment_text,
-                        "description": "",
-                        "price_from": price_text,
-                        "price_to": "",
-                    }
-                )
+            for selector in price_selectors:
+                try:
+                    price_elements = card.find_elements(By.CSS_SELECTOR, selector)
+                    if price_elements:
+                        price_text = price_elements[0].text.strip()
+                        if price_text and (
+                            "₽" in price_text
+                            or "руб" in price_text
+                            or price_text.isdigit()
+                        ):
+                            price = price_text
+                            break
+                except:
+                    continue
 
-            except Exception as e:
-                continue
+            # Если цену не нашли в специальных элементах, ищем в тексте карточки
+            if not price:
+                try:
+                    card_text = card.text
+                    import re
 
-        return len(self.data) > 0
+                    # Ищем цены в формате "1000 ₽", "от 800 до 1200 ₽", "800-1200 руб" и т.д.
+                    price_patterns = [
+                        r"от\s+\d+(?:\s*\d+)*\s+до\s+\d+(?:\s*\d+)*\s*[₽руб]",
+                        r"\d+(?:\s*\d+)*\s*[-–—]\s*\d+(?:\s*\d+)*\s*[₽руб]",
+                        r"\d+(?:\s*\d+)*\s*[₽руб]",
+                        r"от\s+\d+(?:\s*\d+)*\s*[₽руб]",
+                        r"до\s+\d+(?:\s*\d+)*\s*[₽руб]",
+                    ]
+
+                    for pattern in price_patterns:
+                        match = re.search(pattern, card_text, re.IGNORECASE)
+                        if match:
+                            price = match.group(0).strip()
+                            break
+                except:
+                    pass
+
+            # Создаем запись об услуге
+            service_data = {
+                "category": category_name,
+                "service": service_name,
+                "duration": duration,
+                "description": description,
+                "price": price,
+            }
+
+            return service_data
+
+        except Exception as e:
+            print(f"      Ошибка извлечения данных из карточки: {e}")
+            return None
 
     def save_to_csv(self, filename="price_list.csv"):
         """Сохранение данных в CSV файл"""
@@ -606,14 +347,7 @@ class PriceListParser:
 
         try:
             with open(filename, "w", newline="", encoding="utf-8") as csvfile:
-                fieldnames = [
-                    "category",
-                    "service",
-                    "duration",
-                    "description",
-                    "price_from",
-                    "price_to",
-                ]
+                fieldnames = ["category", "service", "duration", "description", "price"]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
                 writer.writeheader()
@@ -628,41 +362,47 @@ class PriceListParser:
             print(f"Ошибка при сохранении: {e}")
             return False
 
-    def debug_page_structure(self):
-        """Отладочный метод для анализа структуры страницы"""
-        print("=== ОТЛАДКА СТРУКТУРЫ СТРАНИЦЫ ===")
+    def show_parsing_stats(self):
+        """Показать статистику парсинга"""
+        if not self.data:
+            return
 
-        # Поиск всех возможных классов
-        all_elements = self.driver.find_elements(By.CSS_SELECTOR, "*[class]")
-        classes = set()
+        print(f"\n=== СТАТИСТИКА ПАРСИНГА ===")
+        print(f"Всего услуг: {len(self.data)}")
 
-        for elem in all_elements:
-            class_attr = elem.get_attribute("class")
-            if class_attr:
-                classes.update(class_attr.split())
+        # Группируем по категориям
+        categories = {}
+        for item in self.data:
+            cat = item["category"] or "Без категории"
+            if cat not in categories:
+                categories[cat] = 0
+            categories[cat] += 1
 
-        service_related = [
-            cls
-            for cls in classes
-            if "service" in cls.lower()
-            or "price" in cls.lower()
-            or "category" in cls.lower()
-        ]
-        print("Классы, связанные с услугами:")
-        for cls in sorted(service_related):
-            print(f"  .{cls}")
+        print(f"Категорий: {len(categories)}")
+        for cat, count in sorted(categories.items()):
+            print(f"  - {cat}: {count} услуг")
 
-        # Поиск текста, похожего на цены
-        price_elements = self.driver.find_elements(
-            By.XPATH, "//*[contains(text(), '₽') or contains(text(), 'руб')]"
-        )
-        print(f"\nНайдено элементов с ценами: {len(price_elements)}")
+        # Считаем услуги с ценами
+        with_prices = sum(1 for item in self.data if item["price"])
+        print(f"Услуг с ценами: {with_prices}")
+        print(f"Услуг без цен: {len(self.data) - with_prices}")
 
-        # Вывод части HTML для анализа
-        print("\n=== ФРАГМЕНТ HTML ===")
-        body = self.driver.find_element(By.TAG_NAME, "body")
-        html_snippet = body.get_attribute("innerHTML")[:2000]
-        print(html_snippet)
+        # Считаем услуги с описанием и длительностью
+        with_duration = sum(1 for item in self.data if item["duration"])
+        with_description = sum(1 for item in self.data if item["description"])
+        print(f"Услуг с длительностью: {with_duration}")
+        print(f"Услуг с описанием: {with_description}")
+
+        # Показываем примеры найденных услуг
+        print(f"\n=== ПРИМЕРЫ УСЛУГ ===")
+        for i, item in enumerate(self.data[:10]):
+            print(f"{i+1}. Категория: {item['category']}")
+            print(f"   Услуга: {item['service']}")
+            if item["price"]:
+                print(f"   Цена: {item['price']}")
+            if item["duration"]:
+                print(f"   Длительность: {item['duration']}")
+            print()
 
     def run(self, output_file="price_list.csv", debug=False):
         """Основной метод запуска парсера"""
@@ -673,13 +413,6 @@ class PriceListParser:
             if not self.wait_for_page_load():
                 print("Не удалось дождаться загрузки страницы")
                 return False
-
-            # Дополнительная проверка и прокрутка после основной загрузки
-            print("\nВыполняем дополнительную прокрутку для полной загрузки...")
-            self.scroll_to_load_all_content()
-
-            if debug:
-                self.debug_page_structure()
 
             print("\nНачинаем парсинг...")
             if not self.parse_services():
@@ -703,67 +436,23 @@ class PriceListParser:
             if self.driver:
                 self.driver.quit()
 
-    def show_parsing_stats(self):
-        """Показать статистику парсинга"""
-        if not self.data:
-            return
-
-        print(f"\n=== СТАТИСТИКА ПАРСИНГА ===")
-        print(f"Всего услуг: {len(self.data)}")
-
-        # Группируем по категориям
-        categories = {}
-        for item in self.data:
-            cat = item["category"] or "Без категории"
-            if cat not in categories:
-                categories[cat] = 0
-            categories[cat] += 1
-
-        print(f"Категорий: {len(categories)}")
-        for cat, count in categories.items():
-            print(f"  - {cat}: {count} услуг")
-
-        # Считаем услуги с ценами
-        with_prices = sum(
-            1 for item in self.data if item["price_from"] or item["price_to"]
-        )
-        print(f"Услуг с ценами: {with_prices}")
-        print(f"Услуг без цен: {len(self.data) - with_prices}")
-
-        # Считаем услуги с диапазоном цен
-        with_price_range = sum(
-            1 for item in self.data if item["price_from"] and item["price_to"]
-        )
-        print(f"Услуг с диапазоном цен: {with_price_range}")
-
-        # Считаем услуги с описанием и длительностью
-        with_duration = sum(1 for item in self.data if item["duration"])
-        with_description = sum(1 for item in self.data if item["description"])
-        print(f"Услуг с длительностью: {with_duration}")
-        print(f"Услуг с описанием: {with_description}")
-
 
 def main():
     """Главная функция"""
-    print("=== ПАРСЕР ПРАЙС-ЛИСТА ===")
-    print("Версия с улучшенной обработкой динамического контента")
+    print("=== ПАРСЕР ПРАЙС-ЛИСТА С ПРАВИЛЬНОЙ СТРУКТУРОЙ ===")
+    print("Версия с парсингом по контейнерам")
 
-    # Создаем парсер (headless=False для отладки)
+    # Создаем парсер
     parser = PriceListParser(headless=False)
 
-    # Запускаем парсинг с отладкой
-    success = parser.run(output_file="price_list.csv", debug=True)
+    # Запускаем парсинг
+    success = parser.run(output_file="price_list_fixed.csv", debug=True)
 
     if success:
         print("\n✅ Парсинг завершен успешно!")
-        print("Проверьте файл price_list.csv")
+        print("Проверьте файл price_list_fixed.csv")
     else:
         print("\n❌ Парсинг завершился с ошибками")
-        print("Попробуйте:")
-        print("1. Проверить интернет-соединение")
-        print("2. Убедиться что сайт доступен")
-        print("3. Обновить ChromeDriver")
-        print("4. Запустить с headless=False для визуальной отладки")
 
 
 if __name__ == "__main__":
