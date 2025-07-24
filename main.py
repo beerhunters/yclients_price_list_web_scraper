@@ -352,13 +352,22 @@ class PriceListParser:
                             if price_elements:
                                 price = price_elements[0].text.strip()
 
-                            # Объединяем комментарий (длительность + описание)
-                            comment_parts = []
-                            if duration:
-                                comment_parts.append(f"Длительность: {duration}")
-                            if description:
-                                comment_parts.append(f"Описание: {description}")
-                            comment = " | ".join(comment_parts)
+                            # Разбираем цену на диапазон (от - до)
+                            price_from = ""
+                            price_to = ""
+                            if price:
+                                # Ищем паттерны типа "800 - 1200", "800-1200", "от 800 до 1200"
+                                import re
+
+                                price_range_match = re.search(
+                                    r"(\d+)\s*[-–—]\s*(\d+)", price
+                                )
+                                if price_range_match:
+                                    price_from = price_range_match.group(1).strip()
+                                    price_to = price_range_match.group(2).strip()
+                                else:
+                                    # Если диапазона нет, записываем всю цену в price_from
+                                    price_from = price
 
                             # Добавляем данные если есть название услуги
                             if service_name:
@@ -366,8 +375,10 @@ class PriceListParser:
                                     {
                                         "category": current_category,
                                         "service": service_name,
-                                        "comment": comment,
-                                        "price": price,
+                                        "duration": duration,
+                                        "description": description,
+                                        "price_from": price_from,
+                                        "price_to": price_to,
                                     }
                                 )
 
@@ -431,8 +442,10 @@ class PriceListParser:
                                             {
                                                 "category": "Общая категория",
                                                 "service": service_text,
-                                                "comment": "",
-                                                "price": price_text,
+                                                "duration": "",
+                                                "description": "",
+                                                "price_from": price_text,
+                                                "price_to": "",
                                             }
                                         )
                                 except:
@@ -479,8 +492,10 @@ class PriceListParser:
                                 {
                                     "category": "Автоопределение",
                                     "service": service_name,
-                                    "comment": "",
-                                    "price": price,
+                                    "duration": "",
+                                    "description": "",
+                                    "price_from": price,
+                                    "price_to": "",
                                 }
                             )
 
@@ -522,8 +537,10 @@ class PriceListParser:
                                         {
                                             "category": "DOM структура",
                                             "service": service_name,
-                                            "comment": "",
-                                            "price": price,
+                                            "duration": "",
+                                            "description": "",
+                                            "price_from": price,
+                                            "price_to": "",
                                         }
                                     )
                 except:
@@ -567,8 +584,10 @@ class PriceListParser:
                     {
                         "category": current_category,
                         "service": service_text,
-                        "comment": comment_text,
-                        "price": price_text,
+                        "duration": comment_text,
+                        "description": "",
+                        "price_from": price_text,
+                        "price_to": "",
                     }
                 )
 
@@ -585,7 +604,14 @@ class PriceListParser:
 
         try:
             with open(filename, "w", newline="", encoding="utf-8") as csvfile:
-                fieldnames = ["category", "service", "comment", "price"]
+                fieldnames = [
+                    "category",
+                    "service",
+                    "duration",
+                    "description",
+                    "price_from",
+                    "price_to",
+                ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
                 writer.writeheader()
@@ -696,9 +722,23 @@ class PriceListParser:
             print(f"  - {cat}: {count} услуг")
 
         # Считаем услуги с ценами
-        with_prices = sum(1 for item in self.data if item["price"])
+        with_prices = sum(
+            1 for item in self.data if item["price_from"] or item["price_to"]
+        )
         print(f"Услуг с ценами: {with_prices}")
         print(f"Услуг без цен: {len(self.data) - with_prices}")
+
+        # Считаем услуги с диапазоном цен
+        with_price_range = sum(
+            1 for item in self.data if item["price_from"] and item["price_to"]
+        )
+        print(f"Услуг с диапазоном цен: {with_price_range}")
+
+        # Считаем услуги с описанием и длительностью
+        with_duration = sum(1 for item in self.data if item["duration"])
+        with_description = sum(1 for item in self.data if item["description"])
+        print(f"Услуг с длительностью: {with_duration}")
+        print(f"Услуг с описанием: {with_description}")
 
 
 def main():
