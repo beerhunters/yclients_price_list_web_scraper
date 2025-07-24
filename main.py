@@ -109,7 +109,7 @@ class PriceListParser:
         return True  # Продолжаем парсинг даже если не нашли специфичные элементы
 
     def scroll_to_load_all_content(self):
-        """Полная прокрутка страницы для загрузки всего lazy-loading контента"""
+        """Упрощенная прокрутка страницы для загрузки всего lazy-loading контента"""
         print("Начинаем полную прокрутку для загрузки всего контента...")
 
         # Получаем начальную высоту страницы
@@ -117,7 +117,7 @@ class PriceListParser:
         scroll_pause_time = 2
         scroll_step = 500  # Прокручиваем по 500px за раз
 
-        # Сначала прокручиваем постепенно вниз
+        # Прокручиваем постепенно вниз до загрузки всего контента
         current_position = 0
         while current_position < last_height:
             # Прокручиваем на следующий шаг
@@ -133,59 +133,12 @@ class PriceListParser:
 
         print("Первичная прокрутка завершена")
 
-        # Теперь делаем несколько полных прокруток для надежности
-        for scroll_round in range(3):
-            print(f"Раунд прокрутки {scroll_round + 1}/3")
-
-            # Прокрутка до самого низа
-            self.driver.execute_script(
-                "window.scrollTo(0, document.body.scrollHeight);"
-            )
-            time.sleep(scroll_pause_time)
-
-            # Проверяем, подгрузился ли новый контент
-            new_height = self.driver.execute_script("return document.body.scrollHeight")
-            if new_height > last_height:
-                print(
-                    f"Подгружен дополнительный контент: {last_height} -> {new_height}"
-                )
-                last_height = new_height
-
-                # Если контент еще подгружается, делаем дополнительную паузу
-                time.sleep(3)
-            else:
-                print("Новый контент не обнаружен")
-
-            # Прокрутка вверх и снова вниз для активации всех lazy-load элементов
-            self.driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)
-            self.driver.execute_script(
-                "window.scrollTo(0, document.body.scrollHeight);"
-            )
-            time.sleep(scroll_pause_time)
-
-        # Финальная прокрутка по всей странице для активации всех элементов
-        print("Финальная прокрутка по всей странице...")
-        final_height = self.driver.execute_script("return document.body.scrollHeight")
-
-        # Прокручиваем от верха до низа с остановками
-        positions = [
-            i * (final_height // 10) for i in range(11)
-        ]  # 11 позиций (0%, 10%, 20%, ..., 100%)
-
-        for position in positions:
-            self.driver.execute_script(f"window.scrollTo(0, {position});")
-            time.sleep(0.8)
-
         # Возвращаемся в начало страницы
         self.driver.execute_script("window.scrollTo(0, 0);")
         time.sleep(2)
 
         final_height = self.driver.execute_script("return document.body.scrollHeight")
         print(f"Прокрутка завершена. Итоговая высота страницы: {final_height}px")
-
-        # Дополнительная пауза для стабилизации DOM
-        time.sleep(3)
 
     def parse_services(self):
         """Парсинг услуг со страницы"""
@@ -303,10 +256,21 @@ class PriceListParser:
 
             for container in containers:
                 try:
-                    # Проверяем есть ли в контейнере категория
+                    # Проверяем есть ли в контейнере категория (исправили опечатку)
                     category_elements = container.find_elements(
                         By.CLASS_NAME, "service_caterogy_title"
                     )
+                    if not category_elements:
+                        # Пробуем альтернативные варианты написания
+                        category_elements = container.find_elements(
+                            By.CLASS_NAME, "service_category_title"
+                        )
+                    if not category_elements:
+                        category_elements = container.find_elements(
+                            By.CSS_SELECTOR,
+                            "[class*='category_title'], [class*='category-title']",
+                        )
+
                     if category_elements:
                         current_category = category_elements[0].text.strip()
                         print(f"Найдена категория: {current_category}")
@@ -316,6 +280,12 @@ class PriceListParser:
                     service_cards = container.find_elements(
                         By.CLASS_NAME, "service-card"
                     )
+                    if not service_cards:
+                        service_cards = container.find_elements(
+                            By.CSS_SELECTOR,
+                            "[class*='service-card'], [class*='service_card']",
+                        )
+
                     print(f"В контейнере найдено карточек услуг: {len(service_cards)}")
 
                     for card in service_cards:
@@ -325,6 +295,11 @@ class PriceListParser:
                             title_elements = card.find_elements(
                                 By.CLASS_NAME, "title-block__title"
                             )
+                            if not title_elements:
+                                title_elements = card.find_elements(
+                                    By.CSS_SELECTOR,
+                                    "[class*='title-block'], [class*='title_block']",
+                                )
                             if title_elements:
                                 service_name = title_elements[0].text.strip()
 
@@ -333,6 +308,11 @@ class PriceListParser:
                             duration_elements = card.find_elements(
                                 By.CLASS_NAME, "comment__seance-length"
                             )
+                            if not duration_elements:
+                                duration_elements = card.find_elements(
+                                    By.CSS_SELECTOR,
+                                    "[class*='seance-length'], [class*='seance_length']",
+                                )
                             if duration_elements:
                                 duration = duration_elements[0].text.strip()
 
@@ -345,29 +325,51 @@ class PriceListParser:
                                 description = desc_elements[0].text.strip()
 
                             # Цена
-                            price = ""
+                            price_text = ""
                             price_elements = card.find_elements(
                                 By.CLASS_NAME, "price-range"
                             )
+                            if not price_elements:
+                                price_elements = card.find_elements(
+                                    By.CSS_SELECTOR,
+                                    "[class*='price-range'], [class*='price_range']",
+                                )
                             if price_elements:
-                                price = price_elements[0].text.strip()
+                                price_text = price_elements[0].text.strip()
 
-                            # Разбираем цену на диапазон (от - до)
+                            # Разбираем цену на диапазон (улучшенная обработка)
                             price_from = ""
                             price_to = ""
-                            if price:
-                                # Ищем паттерны типа "800 - 1200", "800-1200", "от 800 до 1200"
+                            if price_text:
+                                # Убираем символы валюты и лишние пробелы
                                 import re
 
-                                price_range_match = re.search(
-                                    r"(\d+)\s*[-–—]\s*(\d+)", price
+                                # Паттерн для цен типа "1 000 – 1 400 ₽", "800-1200", "от 800 до 1200"
+                                price_clean = re.sub(
+                                    r"[₽руб\s]", "", price_text.lower()
                                 )
+                                price_range_match = re.search(
+                                    r"(\d+(?:\s*\d+)*)\s*[-–—]\s*(\d+(?:\s*\d+)*)",
+                                    price_text,
+                                )
+
                                 if price_range_match:
-                                    price_from = price_range_match.group(1).strip()
-                                    price_to = price_range_match.group(2).strip()
+                                    # Убираем пробелы из чисел
+                                    price_from = re.sub(
+                                        r"\s+", "", price_range_match.group(1)
+                                    )
+                                    price_to = re.sub(
+                                        r"\s+", "", price_range_match.group(2)
+                                    )
                                 else:
-                                    # Если диапазона нет, записываем всю цену в price_from
-                                    price_from = price
+                                    # Если диапазона нет, извлекаем первое число
+                                    number_match = re.search(
+                                        r"(\d+(?:\s*\d+)*)", price_text
+                                    )
+                                    if number_match:
+                                        price_from = re.sub(
+                                            r"\s+", "", number_match.group(1)
+                                        )
 
                             # Добавляем данные если есть название услуги
                             if service_name:
