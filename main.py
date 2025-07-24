@@ -421,7 +421,7 @@ class PriceListParser:
         return services
 
     def extract_service_data_from_card(self, card, category_name):
-        """Оптимизированное извлечение данных из карточки"""
+        """Оптимизированное извлечение данных из карточки с правильной классификацией"""
         try:
             # Получаем весь текст карточки один раз
             card_text = card.text.strip()
@@ -430,12 +430,7 @@ class PriceListParser:
 
             # 1. НАЗВАНИЕ УСЛУГИ - приоритетные селекторы
             service_name = ""
-            name_selectors = [
-                ".title-block__title",
-                ".service-title",
-                "h3",
-                "h4",  # Только самые вероятные
-            ]
+            name_selectors = [".title-block__title", ".service-title", "h3", "h4"]
 
             for selector in name_selectors:
                 try:
@@ -449,92 +444,141 @@ class PriceListParser:
             if not service_name:
                 return None
 
-            # Инициализация остальных полей
+            # Инициализация полей
             duration = ""
             description = ""
             price = ""
 
-            # 2. БЫСТРЫЙ ПОИСК ВСЕХ ДАННЫХ ОДНИМ ПРОХОДОМ
-            # Разбиваем текст на строки для анализа
-            lines = [line.strip() for line in card_text.split("\n") if line.strip()]
-
-            # Предварительные паттерны для быстрого определения
+            # 2. УЛУЧШЕННЫЕ ПАТТЕРНЫ ДЛЯ ТОЧНОЙ КЛАССИФИКАЦИИ
             import re
 
-            price_pattern = re.compile(
-                r"(\d+(?:\s*\d+)*\s*[-–—]?\s*\d*(?:\s*\d+)*\s*[₽руб]|от\s+\d+|₽\s*\d+)",
-                re.IGNORECASE,
-            )
-            time_pattern = re.compile(
-                r"(\d+\s*(?:мин|минут|ч|час|часов)|^\d+:\d+)", re.IGNORECASE
-            )
+            # Более строгие паттерны для цен
+            price_patterns = [
+                r"^\d+\s*[-–—]\s*\d+\s*[₽руб]",  # 1000-2000₽
+                r"^\d+\s*[₽руб]",  # 1500₽
+                r"^от\s+\d+\s*[₽руб]?",  # от 1500₽
+                r"^до\s+\d+\s*[₽руб]?",  # до 3000₽
+                r"^\d+\s*руб",  # 1500 руб
+                r"^₽\s*\d+",  # ₽1500
+            ]
 
-            # Проходим по строкам и классифицируем их
-            for line in lines:
-                if line == service_name:
-                    continue
+            # Паттерны для времени
+            time_patterns = [
+                r"^\d+\s*мин",  # 60 мин
+                r"^\d+\s*минут",  # 60 минут
+                r"^\d+\s*ч",  # 2 ч
+                r"^\d+\s*час",  # 2 часа
+                r"^\d+:\d+",  # 1:30
+                r"^\d+\s*[-–—]\s*\d+\s*мин",  # 30-60 мин
+            ]
 
-                # Проверяем на цену
-                if not price and price_pattern.search(line):
-                    price = line
-                    continue
+            # 3. СНАЧАЛА ИЩЕМ ЧЕРЕЗ СЕЛЕКТОРЫ (наиболее надежно)
+            # Цена через селекторы
+            try:
+                price_element = card.find_element(
+                    By.CSS_SELECTOR, ".price-range, .price, .cost"
+                )
+                if price_element and price_element.text.strip():
+                    price = price_element.text.strip()
+            except:
+                pass
 
-                # Проверяем на время
-                if not duration and time_pattern.search(line):
-                    duration = line
-                    continue
+            # Длительность через селекторы
+            try:
+                duration_element = card.find_element(
+                    By.CSS_SELECTOR, ".comment__seance-length, .duration, .time"
+                )
+                if duration_element and duration_element.text.strip():
+                    text = duration_element.text.strip()
+                    # Проверяем что это не цена
+                    if not any(
+                        re.match(pattern, text, re.IGNORECASE)
+                        for pattern in price_patterns
+                    ):
+                        duration = text
+            except:
+                pass
 
-                # Остальное считаем описанием (если подходит по критериям)
-                if (
-                    not description
-                    and len(line) > 15
-                    and not line.isdigit()
-                    and not price_pattern.search(line)
-                    and not time_pattern.search(line)
-                ):
-                    description = line
+            # Описание через селекторы
+            try:
+                desc_element = card.find_element(
+                    By.CSS_SELECTOR, ".description, .service-description"
+                )
+                if desc_element and desc_element.text.strip():
+                    text = desc_element.text.strip()
+                    if text != service_name and len(text) > 10:
+                        description = text
+            except:
+                pass
 
-            # 3. ДОПОЛНИТЕЛЬНЫЙ ПОИСК ЧЕРЕЗ СЕЛЕКТОРЫ (только если не найдено)
+            # 4. ДОПОЛНЯЕМ ДАННЫЕ ИЗ ТЕКСТА (только если не найдено через селекторы)
+            if not price or not duration or not description:
+                lines = [line.strip() for line in card_text.split("\n") if line.strip()]
+
+                # Создаем списки кандидатов для каждого типа данных
+                price_candidates = []
+                time_candidates = []
+                description_candidates = []
+
+                for line in lines:
+                    if line == service_name:
+                        continue
+
+                    # Проверяем на цену (строгие критерии)
+                    is_price = False
+                    for pattern in price_patterns:
+                        if re.match(pattern, line, re.IGNORECASE):
+                            price_candidates.append(line)
+                            is_price = True
+                            break
+
+                    if is_price:
+                        continue
+
+                    # Проверяем на время
+                    is_time = False
+                    for pattern in time_patterns:
+                        if re.match(pattern, line, re.IGNORECASE):
+                            time_candidates.append(line)
+                            is_time = True
+                            break
+
+                    if is_time:
+                        continue
+
+                    # Остальное может быть описанием
+                    if (
+                        len(line) > 15
+                        and not line.isdigit()
+                        and not any(char in line for char in ["₽", "руб"])
+                        and not re.search(r"\d+\s*(мин|час|ч)", line, re.IGNORECASE)
+                    ):
+                        description_candidates.append(line)
+
+                # Выбираем лучших кандидатов
+                if not price and price_candidates:
+                    price = price_candidates[0]  # Берем первого кандидата на цену
+
+                if not duration and time_candidates:
+                    duration = time_candidates[0]  # Берем первого кандидата на время
+
+                if not description and description_candidates:
+                    # Выбираем самое длинное описание
+                    description = max(description_candidates, key=len)
+
+            # 5. ПОСЛЕДНЯЯ ПОПЫТКА НАЙТИ ЦЕНУ ЧЕРЕЗ МЯГКИЕ ПАТТЕРНЫ
             if not price:
-                try:
-                    price_element = card.find_element(
-                        By.CSS_SELECTOR, ".price-range, .price, .cost"
-                    )
-                    if price_element:
-                        price = price_element.text.strip()
-                except:
-                    pass
-
-            if not duration:
-                try:
-                    duration_element = card.find_element(
-                        By.CSS_SELECTOR, ".comment__seance-length, .duration, .time"
-                    )
-                    if duration_element and duration_element.text.strip():
-                        text = duration_element.text.strip()
-                        if not any(
-                            word in text.lower() for word in ["₽", "руб", "цена"]
-                        ):
-                            duration = text
-                except:
-                    pass
-
-            if not description:
-                try:
-                    desc_element = card.find_element(
-                        By.CSS_SELECTOR, ".description, .service-description, p"
-                    )
-                    if desc_element and desc_element.text.strip():
-                        text = desc_element.text.strip()
+                # Ищем числа с валютой где угодно в строке
+                for line in card_text.split("\n"):
+                    line = line.strip()
+                    if line and line != service_name:
+                        # Ищем любое число с рублями
+                        price_match = re.search(r"\d+\s*[₽руб]", line, re.IGNORECASE)
                         if (
-                            text != service_name
-                            and len(text) > 10
-                            and not price_pattern.search(text)
-                            and not time_pattern.search(text)
-                        ):
-                            description = text
-                except:
-                    pass
+                            price_match and len(line) < 50
+                        ):  # Короткие строки более вероятно цены
+                            price = line
+                            break
 
             return {
                 "category": category_name,
